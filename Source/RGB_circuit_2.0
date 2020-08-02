@@ -1,0 +1,3089 @@
+module RGB_circuit
+(	input  clk_100M,
+	input	rst,
+	output 	led
+);
+
+    wire    clk_10M;
+
+clk_wiz_0 instance_name(
+    .clk_100M(clk_100M),
+    .clk_10M(clk_10M)
+);
+
+parameter	T0H = 6'd17;
+parameter	T0L = 6'd50; //0码的高低电平时间
+parameter	T1H = 6'd50;
+parameter	T1L = 6'd17; //1码的高低电平时间
+parameter	RST = 14'd15000; //复位时间
+
+
+
+
+reg 	led_pwm; 									//led输出
+assign 	led = led_pwm;
+reg 	[6:0] CS, NS; 								//现�?�次�?
+reg 	shift;									    //24位移位输�?
+reg 	[6:0] cycle_cnt; 							//周期计数
+reg 	[4:0] bit_cnt; 								//对输出的比特位进行计数，移位
+reg		St;											//标记是否�?要状态转�?
+reg		counter1 = 0, counter2 = 0;					//定时工作计数
+reg		count = 0;									//标记数据传输到哪�?个灯
+reg 	Time = 0;									//计时
+reg [13:0]  rst_cnt;//复位输出
+
+//不同颜色的输出数�?
+parameter	BLUE    =24'b0000_0000_1110_0101_1110_1110;
+parameter	PURPLE	=24'b1101_0000_0010_0000_1001_0000;
+parameter	GREEN	=24'b0000_0000_1111_1111_0111_1111;
+parameter	PINK    =24'b1111_1111_0110_1001_1011_0100;
+parameter	DBLUE	=24'b0101_1111_1001_1110_1010_0000;
+parameter	OFF		=24'b0000_0000_0000_0000_0000_0000;
+parameter	WHITE	=24'b1111_1111_1111_1111_1111_1111;
+
+
+
+//状�?�编�?
+parameter S0 = 7'b0000000, S1 = 7'b0000001, S2 = 7'b0000010, S3 = 7'b0000011, S4 = 7'b0000100, S5 = 7'b0000101, S6 = 7'b0000110, S7 = 7'b0000111,
+			S8 = 7'b0001000, S9 = 7'b0001001, S10 = 7'b0001010, S11 = 7'b0001011, S12 = 7'b0001100, S13 = 7'b0001101, S14 = 7'b0001110, S15 = 7'b0001111, 
+			S16 = 7'b0010000, S17 = 7'b0010001, S18 = 7'b0010010, S19 = 7'b0010011, S20 = 7'b0010100, S21 = 7'b0010101, S22 = 7'b0010110, S23 = 7'b0010111, 
+			S24 = 7'b0011000, S25 = 7'b0011001, S26 = 7'b0011010, S27 = 7'b0011011, S28 = 7'b0011100, S29 = 7'b0011101, S30 = 7'b0011110, S31 = 7'b0011111,
+			S32 = 7'b0100000, S33 = 7'b0100001, S34 = 7'b0100010, S35 = 7'b0100011, S36 = 7'b0100100, S37 = 7'b0100101, S38 = 7'b0100110, S39 = 7'b0100111, 
+			S40 = 7'b0101000, S41 = 7'b0101001, S42 = 7'b0101010, S43 = 7'b0101011, S44 = 7'b0101100, S45 = 7'b0101101, S46 = 7'b0101110, S47 = 7'b0101111, 
+			S48 = 7'b0110000, S49 = 7'b0110001, S50 = 7'b0110010, S51 = 7'b0110011, S52 = 7'b0110100, S53 = 7'b0110101, S54 = 7'b0110110, S55 = 7'b0110111, 
+			S56 = 7'b0111000, S57 = 7'b0111001, S58 = 7'b0111010, S59 = 7'b0111011, S60 = 7'b0111100, S61 = 7'b0111101, S62 = 7'b0111110, S63 = 7'b0111111, 
+			S64 = 7'b1000000, S65 = 7'b1000001, S66 = 7'b1000010, S67 = 7'b1000011, S68 = 7'b1000100, S69 = 7'b1000101, S70 = 7'b1000110, S71 = 7'b1000111, 
+			S72 = 7'b1001000, S73 = 7'b1001001, S74 = 7'b1001010, S75 = 7'b1001011, S76 = 7'b1001100, S77 = 7'b1001101, S78 = 7'b1001110, S79 = 7'b1001111, 
+			S80 = 7'b1010000, S81 = 7'b1010001, S82 = 7'b1010010, S83 = 7'b1010011, S84 = 7'b1010100, S85 = 7'b1010101, S86 = 7'b1010110, S87 = 7'b1010111, 
+			S88 = 7'b1011000, S89 = 7'b1011001, S90 = 7'b1011010, S91 = 7'b1011011, S92 = 7'b1011100, S93 = 7'b1011101, S94 = 7'b1011110, S95 = 7'b1011111,
+			IDLE = 7'b1100000, //空闲状�??
+			RST_FSM = 7'b1100001; //复位状�??
+
+
+
+
+
+//LED数据高低周期，一�?0/1码持续时�?
+always @(posedge clk_10M or negedge rst)
+begin
+	if(!rst)
+		cycle_cnt <= 7'd0;
+	else if(cycle_cnt == (T0H + T0L - 6'd1))
+		cycle_cnt <= 7'd0;
+	else if(CS != RST_FSM)	
+		cycle_cnt <= cycle_cnt + 1'b1;  //每次clk传出�?个数据，则cycle_cnt++，直到传输完�?个bit时，就是cycle_cnt加到TH+TL的时�?
+	else 
+		cycle_cnt <= 7'd0;				//现�?�为RST_FSM�?
+end
+
+
+//记录实际时间
+always@(posedge clk_10M, negedge rst)
+begin
+	if(!rst)
+		Time <= 0;
+	else 
+		Time <= Time + 1;
+	if(Time == 5000000)      //clk_10MHz, 当Time数到5E6时，即过了实�?0.5s。此时需要状态转�?
+		begin
+		St <= 1'b1;
+		Time <= 0;
+		end
+	else 
+		St <= 1'b0;
+end		
+
+
+//记录rst的时间，状�?�转�?
+always @(posedge clk_10M or negedge rst)
+begin
+	if(!rst)
+		rst_cnt <= 14'd0;
+	else if(St == RST_FSM)
+		rst_cnt <= rst_cnt + 1'b1;
+	else
+		rst_cnt <= 14'd0;
+end
+
+//rst的时间一到就发状态转移信号，�?始下�?�?
+always @(posedge clk_10M or negedge rst)
+begin
+	if(!rst)
+	St <= 1'b0;
+	else if(rst_cnt == RST)
+	St <=1'b1;
+	else
+	St <= 1'b0;
+end
+
+
+
+//记录24bit数据的传输情�?
+always @(posedge clk_10M or negedge rst)
+begin
+	if(!rst)
+		bit_cnt <= 5'd0;
+	else if (bit_cnt == 5'd24)
+		begin
+		count <= count + 1;		//每传�?24bit，则意味�?�?个灯已经获得数据�?
+		bit_cnt <= 5'd0;
+		end
+	else if(cycle_cnt == (T0H + T0L - 6'd1))
+		bit_cnt <= bit_cnt + 1'b1;
+	else
+		begin
+		bit_cnt <= bit_cnt;
+		end
+end
+
+	
+
+
+//FSM 1 寄存器迁�?
+always@(posedge clk_10M, negedge rst)
+begin
+	if(!rst)
+		CS <= S0;
+	else
+		CS <= NS;
+end
+
+
+//FSM 2 组合逻辑，描述状态转移条�?
+always@(*)
+begin
+	case (CS)
+	IDLE:
+		NS = S0;
+	S0:
+		begin
+			if(St == 1'b0) NS = S0;
+			else begin NS = S1;	counter1 = counter1 + 1; end //计时
+		end
+	S1:
+		begin
+			if(St == 1'b0) NS = S1;
+			else if(counter1 == 29) begin NS = S2; counter1 = 0; end //15s�?
+			else begin NS = S0; counter1 = counter1 + 1; end //计时
+		end
+	S2:
+		begin
+			if(St == 1'b0) NS = S2;
+			else begin NS = S3;	counter1 = counter1 + 1; end //计时
+		end
+	S3:
+		begin
+			if(St == 1'b0) NS = S3;
+			else if(counter1 == 29) begin NS = S4; counter1 = 0; end //30s�?
+			else begin NS = S2; counter1 = counter1 + 1; end //计时
+		end
+	S4:
+		begin
+			if(St == 1'b0) NS = S4;
+			else begin NS = S5;	counter1 = counter1 + 1; end//计时
+		end
+	S5:
+		begin
+			if(St == 1'b0) NS = S5;
+			else if(counter1 == 29) begin NS = S6; counter1 = 0;  end //45s�?
+			else begin NS = S4; counter1 = counter1 + 1; end //计时
+		end
+	S6:
+		begin
+			if(St == 1'b0) NS = S6;
+			else begin NS = S7;	counter1 = counter1 + 1; end //计时
+		end
+	S7:
+		begin
+			if(St == 1'b0) NS = S7;
+			else if((counter1 == 29) && (counter2 == 5)) begin NS = S8; counter1 = 0; counter2 = 0; end //共计5min�?
+			else if(counter1 == 29)  begin NS = S0; counter1 = 0; counter2 = counter2 + 1; end //共计1min�?
+			else begin NS = S6; counter1 = counter1 + 1; end //计时
+		end
+	S8:			//----------------5min�?----------------------------------------------------------------------
+		begin
+			if(St == 1'b0) NS = S8;
+			else begin NS = S9; counter1 = counter1 + 1; end //计时
+		end
+	S9:
+		begin
+			if(St == 1'b0) NS = S9;
+			else if(counter1 == 29) begin NS = S10; counter1 = 0; counter2 = counter2 + 1; end //15s�?
+			else begin NS = S8; counter1 = counter1 + 1; end //计时
+		end
+	S10:
+		begin
+			if(St == 1'b0) NS = S10;
+			else begin NS = S11; counter1 = counter1 + 1; end //计时
+		end
+	S11:
+		begin
+			if(St == 1'b0) NS = S11;
+			else if(counter1 == 29) begin NS = S12; counter1 = 0; counter2 = counter2 + 1; end //15s�?
+			else begin NS = S10; counter1 = counter1 + 1; end //计时
+		end
+	S12:
+		begin
+			if(St == 1'b0) NS = S12;
+			else begin NS = S13; counter1 = counter1 + 1; end //计时
+		end
+	S13:
+		begin
+			if(St == 1'b0) NS = S13;
+			else if(counter1 == 29) begin NS = S14; counter1 = 0; counter2 = counter2 + 1; end //15s�?
+			else begin NS = S12; counter1 = counter1 + 1; end //计时
+		end
+	S14:
+		begin
+			if(St == 1'b0) NS = S14;
+			else begin NS = S15; counter1 = counter1 + 1; end //计时
+		end
+	S15:
+		begin
+			if(St == 1'b0) NS = S15;
+			else if((counter1 == 29)&&(counter2 == 5)) begin NS = S16; counter1 = 0; counter2 = 0; end //5min�?
+			else if(counter1 == 29) begin NS = S8; counter1 = 0; counter2 = counter2 + 1; end //15s后||1min�?
+			else begin NS = S14; counter1 = counter1 + 1; end //计时
+		end
+	S16:		//---------------------10min-----------------------------------------------------------------------------------------------
+		begin
+			if(St == 1'b0) NS = S16;
+			else begin NS = S17;
+			counter1 = counter1 + 1; end //计时
+		end
+	S17:
+		begin
+			if(St == 1'b0) NS = S17;
+			if(counter1 == 29) begin NS = S18; counter1 = 0; counter2 = counter2 + 1; end //15s�?
+			else begin NS = S16; counter1 = counter1 + 1; end //计时
+		end
+	S18:
+		begin
+			if(St == 1'b0) NS = S18;
+			else begin NS = S19; counter1 = counter1 + 1; end //计时
+		end
+	S19:
+		begin
+			if(St == 1'b0) NS = S19;
+			else if(counter1 == 29) begin NS = S5; counter1 = 0; counter2 = counter2 + 1; end //15s�?
+			else begin NS = S18; counter1 = counter1 + 1; end //计时
+		end
+	S20:
+		begin
+			if(St == 1'b0) NS = S20;
+			else begin NS = S21; counter1 = counter1 + 1; end //计时
+		end
+	S21:
+		begin
+			if(St == 1'b0) NS = S21;
+			else if(counter1 == 29) begin NS = S22; counter1 = 0; counter2 = counter2 + 1; end //15s�?
+			else begin NS = S5; counter1 = counter1 + 1; end //计时
+		end
+	S22:
+		begin
+			if(St == 1'b0) NS = S22;
+			else begin NS = S23; counter1 = counter1 + 1; end //计时
+		end
+	S23:
+		begin
+			if(St == 1'b0) NS = S23;
+			else if((counter1 == 29)&&(counter2 == 5)) begin NS = S24; counter1 = 0; counter2 = 0; end //5min�?
+			else if(counter1 == 29) begin NS = S16; counter1 = 0; counter2 = counter2 + 1; end //15s后||1min�?
+			else begin NS = S22; counter1 = counter1 + 1; end //计时
+		end
+	S24:     //---------------------15min----------------------------------------------------------------------------------------------------
+		begin
+			if(St == 1'b0) NS = S24;
+			else begin NS = S25; counter1 = counter1 + 1; end //计时
+		end
+	S25:
+		begin
+			if(St == 1'b0) NS = S25;
+			else if(counter1 == 29) begin NS = S26; counter1 = 0; counter2 = counter2 + 1; end //15s�?
+			else begin NS = S24; counter1 = counter1 + 1; end //计时
+		end
+	S26:
+		begin
+			if(St == 1'b0) NS = S26;
+			else begin NS = S27; counter1 = counter1 + 1; end //计时
+		end
+	S27:
+		begin
+			if(St == 1'b0) NS = S27;
+			else if(counter1 == 29) begin NS = S29; counter1 = 0; counter2 = counter2 + 1; end //15s�?
+			else begin NS = S26; counter1 = counter1 + 1; end //计时
+		end
+	S28:
+		begin
+			if(St == 1'b0) NS = S28;
+			else begin NS = S29; counter1 = counter1 + 1; end //计时
+		end
+	S29:
+		begin
+			if(St == 1'b0) NS = S29;
+			else if(counter1 == 29) begin NS = S30; counter1 = 0; counter2 = counter2 + 1; end //15s�?
+			else begin NS = S29; counter1 = counter1 + 1; end //计时
+		end
+	S30:
+		begin
+			if(St == 1'b0) NS = S30;
+			else begin NS = S31; counter1 = counter1 + 1; end //计时
+		end
+	S31:
+		begin
+			if(St == 1'b0) NS = S31;
+			else if((counter1 == 29)&&(counter2 == 5)) begin NS = S32; counter1 = 0; counter2 = 0; end //5min�?
+			else if(counter1 == 29) begin NS = S24; counter1 = 0; counter2 = counter2 + 1; end //15s后||1min�?
+			else begin NS = S30; counter1 = counter1 + 1; end //计时
+		end
+	S32:   //-----------------------20min----------------------------------------------------------------------------------------------------
+		begin
+			if(St == 1'b0) NS = S32;
+			else begin NS = S33; counter1 = counter1 + 1; end//计时
+		end
+	S33:
+		begin
+			if(St == 1'b0) NS = S33;
+			else if(counter1 == 29) begin NS = S34; counter1 = 0; counter2 = counter2 + 1; end //15s�?
+			else begin NS = S32; counter1 = counter1 + 1; end //计时
+		end
+	S34:
+		begin
+			if(St == 1'b0) NS = S34;
+			else begin NS = S35; counter1 = counter1 + 1; end //计时
+		end
+	S35:
+		begin
+			if(St == 1'b0) NS = S35;
+			else if(counter1 == 29) begin NS = S36; counter1 = 0; counter2 = counter2 + 1; end //15s�?
+			else begin NS = S34; counter1 = counter1 + 1; end //计时
+		end
+	S36:
+		begin
+			if(St == 1'b0) NS = S36;
+			else begin NS = S37; counter1 = counter1 + 1; end //计时
+		end
+	S37:
+		begin
+			if(St == 1'b0) NS = S37;
+			else if(counter1 == 29) begin NS = S38; counter1 = 0; counter2 = counter2 + 1; end //15s�?
+			else begin NS = S39; counter1 = counter1 + 1; end //计时
+		end
+	S38:
+		begin
+			if(St == 1'b0) NS = S38;
+			else begin NS = S39; counter1 = counter1 + 1; end //计时
+		end
+	S39:
+		begin
+			if(St == 1'b0) NS = S39;
+			else if((counter1 == 29)&&(counter2 == 5)) begin NS = S40; counter1 = 0; counter2 = 0; end //5min�?
+			else if(counter1 == 29) begin NS = S32; counter1 = 0; counter2 = counter2 + 1; end //15s后||1min�?
+			else begin NS = S38; counter1 = counter1 + 1; end //计时
+		end
+	S40:           //-------------------25min-----------------------------------------------------------------------------------------------
+		begin
+			if(St == 1'b0) NS = S40;
+			else begin NS = S41; counter1 = counter1 + 1; end //计时
+		end
+	S41:
+		begin
+			if(St == 1'b0) NS = S41;
+			else if(counter1 == 29) begin NS = S42; counter1 = 0; counter2 = counter2 + 1; end //15s�?
+			else begin NS = S40; counter1 = counter1 + 1; end //计时
+		end
+	S42:
+		begin
+			if(St == 1'b0) NS = S42;
+			else begin NS = S43; counter1 = counter1 + 1; end //计时
+		end
+	S43:
+		begin
+			if(St == 1'b0) NS = S43;
+			else if(counter1 == 29) begin NS = S44; counter1 = 0; counter2 = counter2 + 1; end //15s�?
+			else begin NS = S42; counter1 = counter1 + 1; end //计时
+		end
+	S44:
+		begin
+			if(St == 1'b0) NS = S44;
+			else begin NS = S45; counter1 = counter1 + 1; end //计时
+		end
+	S45:
+		begin
+			if(St == 1'b0) NS = S45;
+			else if(counter1 == 29) begin NS = S46; counter1 = 0; counter2 = counter2 + 1; end //15s�?
+			else begin NS = S44; counter1 = counter1 + 1; end //计时
+		end
+	S46:
+		begin
+			if(St == 1'b0) NS = S46;
+			else begin NS = S47; counter1 = counter1 + 1; end //计时
+		end
+	S47:
+		begin
+			if(St == 1'b0) NS = S47;
+			else if((counter1 == 29)&&(counter2 == 5)) begin NS = S48; counter1 = 0; counter2 = 0; end //5min�?
+			else if(counter1 == 29) begin NS = S40; counter1 = 0; counter2 = counter2 + 1; end //15s后||1min�?
+			else begin NS = S46; counter1 = counter1 + 1; end //计时
+		end
+	S48:		//----------------30min�?----------------------------------------------------------------------------------------------------
+		begin
+			if(St == 1'b0) NS = S48;
+			else begin NS = S49; counter1 = counter1 + 1; end //计时
+		end
+	S49:
+		begin
+			if(St == 1'b0) NS = S49;
+			else if(counter1 == 29) begin NS = S50; counter1 = 0; counter2 = counter2 + 1; end //15s�?
+			else begin NS = S48; counter1 = counter1 + 1; end //计时
+		end
+	S50:
+		begin
+			if(St == 1'b0) NS = S50;
+			else begin NS = S51; counter1 = counter1 + 1; end //计时
+		end
+	S51:
+		begin
+			if(St == 1'b0) NS = S51;
+			else if(counter1 == 29) begin NS = S52; counter1 = 0; counter2 = counter2 + 1; end //15s�?
+			else begin NS = S50; counter1 = counter1 + 1; end //计时
+		end
+	S52:
+		begin
+			if(St == 1'b0) NS = S52;
+			else begin NS = S53; counter1 = counter1 + 1; end //计时
+		end
+	S53:
+		begin
+			if(St == 1'b0) NS = S53;
+			else if(counter1 == 29) begin NS = S54; counter1 = 0; counter2 = counter2 + 1; end //15s�?
+			else begin NS = S52; counter1 = counter1 + 1; end //计时
+		end
+	S54:
+		begin
+			if(St == 1'b0) NS = S54;
+			else begin NS = S55; counter1 = counter1 + 1; end //计时
+		end
+	S55:
+		begin
+			if(St == 1'b0) NS = S55;
+			else if((counter1 == 29)&&(counter2 == 5)) begin NS = S56; counter1 = 0; counter2 = 0; end //5min�?
+			else if(counter1 == 29) begin NS = S48; counter1 = 0; counter2 = counter2 + 1; end //15s后||1min�?
+			else begin NS = S54; counter1 = counter1 + 1; end //计时
+		end
+	S56:     //-----------------35min�?--------------------------------------------------------------------------------------------------------
+		begin
+			if(St == 1'b0) NS = S56;
+			else begin NS = S57; counter1 = counter1 + 1; end //计时
+		end
+	S57:
+		begin
+			if(St == 1'b0) NS = S57;
+			else if(counter1 == 29) begin NS = S58; counter1 = 0; counter2 = counter2 + 1; end //15s�?
+			else begin NS = S56; counter1 = counter1 + 1; end //计时
+		end
+	S58:
+		begin
+			if(St == 1'b0) NS = S58;
+			else begin NS = S59; counter1 = counter1 + 1; end //计时
+		end
+	S59:
+		begin
+			if(St == 1'b0) NS = S59;
+			else if(counter1 == 29) begin NS = S60; counter1 = 0; counter2 = counter2 + 1; end //15s�?
+			else begin NS = S58; counter1 = counter1 + 1; end //计时
+		end
+	S60:
+		begin
+			if(St == 1'b0) NS = S60;
+			else begin NS = S61; counter1 = counter1 + 1; end //计时
+		end
+	S61:
+		begin
+			if(St == 1'b0) NS = S61;
+			else if(counter1 == 29) begin NS = S62; counter1 = 0; counter2 = counter2 + 1; end //15s�?
+			else begin NS = S60; counter1 = counter1 + 1; end //计时
+		end
+	S62:
+		begin
+			if(St == 1'b0) NS = S62;
+			else begin NS = S63; counter1 = counter1 + 1; end //计时
+		end
+	S63:
+		begin
+			if(St == 1'b0) NS = S63;
+			else if((counter1 == 29)&&(counter2 == 5)) begin NS = S64; counter1 = 0; counter2 = 0; end //5min�?
+			else if(counter1 == 29) begin NS = S56; counter1 = 0; counter2 = counter2 + 1; end //15s后||1min�?
+			else begin NS = S62; counter1 = counter1 + 1; end //计时
+		end
+	S64:  //------------------40min�?-----------------------------------------------------------------------------------------------------------------
+		begin
+			if(St == 1'b0) NS = S64;
+			else begin NS = S65; counter1 = counter1 + 1; end //计时
+		end
+	S65:
+		begin
+			if(St == 1'b0) NS = S65;
+			else if(counter1 == 29) begin NS = S66; counter1 = 0; counter2 = counter2 + 1; end //15s�?
+			else begin NS = S64; counter1 = counter1 + 1; end //计时
+		end
+	S66:
+		begin
+			if(St == 1'b0) NS = S66;
+			else begin NS = S67; counter1 = counter1 + 1; end //计时
+		end
+	S67:
+		begin
+			if(St == 1'b0) NS = S67;
+			else if(counter1 == 29) begin NS = S68; counter1 = 0; counter2 = counter2 + 1; end //15s�?
+			else begin NS = S66; counter1 = counter1 + 1; end //计时
+		end
+	S68:
+		begin
+			if(St == 1'b0) NS = S68;
+			else begin NS = S69; counter1 = counter1 + 1; end //计时
+		end
+	S69:
+		begin
+			if(St == 1'b0) NS = S69;
+			else if(counter1 == 29) begin NS = S70; counter1 = 0; counter2 = counter2 + 1; end //15s�?
+			else begin NS = S68; counter1 = counter1 + 1; end //计时
+		end
+	S70:
+		begin
+			if(St == 1'b0) NS = S70;
+			else begin NS = S71; counter1 = counter1 + 1; end //计时
+		end
+	S71:
+		begin
+			if(St == 1'b0) NS = S71;
+			else if((counter1 == 29)&&(counter2 == 5)) begin NS = S72; counter1 = 0; counter2 = 0; end //5min�?
+			else if(counter1 == 29) begin NS = S64; counter1 = 0; counter2 = counter2 + 1; end //15s后||1min�?
+			else begin NS = S70; counter1 = counter1 + 1; end //计时
+		end
+	S72:           //------------45min�?------------------------------------------------------------------------------------------------------
+		begin
+			if(St == 1'b0) NS = S72;
+			else begin NS = S73; counter1 = counter1 + 1; end //计时
+		end
+	S73:
+		begin
+			if(St == 1'b0) NS = S73;
+			else if(counter1 == 29) begin NS = S74; counter1 = 0; counter2 = counter2 + 1; end //15s�?
+			else begin NS = S72; counter1 = counter1 + 1; end //计时
+		end
+	S74:
+		begin
+			if(St == 1'b0) NS = S74;
+			else begin NS = S75; counter1 = counter1 + 1; end //计时
+		end
+	S75:
+		begin
+			if(St == 1'b0) NS = S75;
+			else if(counter1 == 29) begin NS = S76; counter1 = 0; counter2 = counter2 + 1; end //15s�?
+			else begin NS = S74; counter1 = counter1 + 1; end //计时
+		end
+	S76:
+		begin
+			if(St == 1'b0) NS = S76;
+			else begin NS = S77; counter1 = counter1 + 1; end //计时
+		end
+	S77:
+		begin
+			if(St == 1'b0) NS = S77;
+			else if(counter1 == 29) begin NS = S78; counter1 = 0; counter2 = counter2 + 1; end //15s�?
+			else begin NS = S76;	counter1 = counter1 + 1; end //计时
+		end
+	S78:
+		begin
+			if(St == 1'b0) NS = S78;
+			else begin NS = S79; counter1 = counter1 + 1; end //计时
+		end
+	S79:
+		begin
+			if(St == 1'b0) NS = S79;
+			else if((counter1 == 29)&&(counter2 == 5)) begin NS = S80; counter1 = 0; counter2 = 0; end //5min�?
+			else if(counter1 == 29) begin NS = S72; counter1 = 0; counter2 = counter2 + 1; end //15s后||1min�?
+			else begin NS = S78; counter1 = counter1 + 1; end //计时
+		end
+	S80:		//--------------50min�?------------------------------------------------------------------------------------------------------
+		begin
+			if(St == 1'b0) NS = S80;
+			else begin NS = S81; counter1 = counter1 + 1; end //计时
+		end
+	S81:
+		begin
+			if(St == 1'b0) NS = S81;
+			else if(counter1 == 29) begin NS = S82; counter1 = 0; counter2 = counter2 + 1; end //15s�?
+			else begin NS = S80; counter1 = counter1 + 1; end //计时
+		end
+	S82:
+		begin
+			if(St == 1'b0) NS = S82;
+			else begin NS = S83; counter1 = counter1 + 1; end //计时
+		end
+	S83:
+		begin
+			if(St == 1'b0) NS = S83;
+			else if(counter1 == 29) begin NS = S84; counter1 = 0; counter2 = counter2 + 1; end //15s�?
+			else begin NS = S82; counter1 = counter1 + 1; end //计时
+		end
+	S84:
+		begin
+			if(St == 1'b0) NS = S84;
+			else begin NS = S85; counter1 = counter1 + 1; end //计时
+		end
+	S85:
+		begin
+			if(St == 1'b0) NS = S85;
+			else if(counter1 == 29) begin NS = S86; counter1 = 0; counter2 = counter2 + 1; end //15s�?
+			else begin NS = S84; counter1 = counter1 + 1; end //计时
+		end
+	S86:
+		begin
+			if(St == 1'b0) NS = S86;
+			else begin NS = S87; counter1 = counter1 + 1; end //计时
+		end
+	S87:
+		begin
+			if(St == 1'b0) NS = S87;
+			else if((counter1 == 29)&&(counter2 == 5)) begin NS = S88; counter1 = 0; counter2 = 0; end //5min�?
+			else if(counter1 == 29) begin NS = S80; counter1 = 0; counter2 = counter2 + 1; end //15s后||1min�?
+			else begin NS = S86; counter1 = counter1 + 1; end //计时
+		end
+	S88:     //-----------------55min--------------------------------------------------------------------------------------------------------
+		begin
+			if(St == 1'b0) NS = S88;
+			else begin NS = S89; counter1 = counter1 + 1; end //计时
+		end
+	S89:
+		begin
+			if(St == 1'b0) NS = S89;
+			else if(counter1 == 29) begin NS = S90; counter1 = 0; counter2 = counter2 + 1; end //15s�?
+			else begin NS = S88; counter1 = counter1 + 1; end //计时
+		end
+	S90:
+		begin
+			if(St == 1'b0) NS = S90;
+			else begin NS = S91; counter1 = counter1 + 1; end //计时
+		end
+	S91:
+		begin
+			if(St == 1'b0) NS = S91;
+			else if(counter1 == 29) begin NS = S92; counter1 = 0; counter2 = counter2 + 1; end //15s�?
+			else begin NS = S90; counter1 = counter1 + 1; end //计时
+		end
+	S92:
+		begin
+			if(St == 1'b0) NS = S92;
+			else begin NS = S93; counter1 = counter1 + 1; end //计时
+		end
+	S93:
+		begin
+			if(St == 1'b0) NS = S93;
+			else if(counter1 == 29) begin NS = S94; counter1 = 0; counter2 = counter2 + 1; end //15s�?
+			else begin NS = S92; counter1 = counter1 + 1; end //计时
+		end
+	S94:
+		begin
+			if(St == 1'b0) NS = S94;
+			else begin NS = S95; counter1 = counter1 + 1; end //计时
+		end
+	S95:
+		begin
+			if(St == 1'b0) NS = S95;
+			else if((counter1 == 29) && (counter2 == 5)) begin NS = S0; counter1 = 0; counter2 = 0; end //12h�?
+			else if(counter1 == 29) begin NS = S88; counter1 = 0; counter2 = counter2 + 1; end //15s后||1min�?
+			else begin NS = S94; counter1 = counter1 + 1; end //计时
+		end
+	default:
+		NS = RST_FSM;
+	endcase
+end
+
+
+//FSM 3 状�?�输�??
+always@(posedge clk_10M, negedge rst)
+begin
+	if(!rst)
+		begin
+			led_pwm <= 1'b0;
+			shift <= 1'b0;
+		end
+	else
+	begin
+		case(CS)
+		IDLE:
+			begin
+			led_pwm <= 1'b0;
+			end
+		S0:
+			begin
+			if(count == 0) shift <= PURPLE[bit_cnt];
+			else if(count == 2) shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于某种颜色编码对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S1:
+			begin
+			if(count == 0) shift <= PURPLE[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end	
+		S2:
+			begin
+			if(count == 0) shift <= PURPLE[bit_cnt];
+			else if(count == 6)shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于CBLUE对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S3:
+			begin
+			if(count == 0) shift <= PURPLE[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S4:
+			begin
+			if(count == 0) shift <= PURPLE[bit_cnt];
+			else if(count == 10) shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于CBLUE对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S5:
+			begin
+			if(count == 0) shift <= PURPLE[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end	
+		S6:
+			begin
+			if(count == 0) shift <= PURPLE[bit_cnt];
+			else if(count == 14) shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于CBLUE对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S7:
+			begin
+			if(count == 0) shift <= PURPLE[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+//-------------------5min�?--------------------------------------------------------------------------------
+		S8:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 1) shift <= GREEN[bit_cnt];
+			else if(count == 2) shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于某种颜色编码对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S9:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 1) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end	
+		S10:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 1) shift <= GREEN[bit_cnt];
+			else if(count == 6)shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于CBLUE对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S11:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 1) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S12:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 1) shift <= GREEN[bit_cnt];
+			else if(count == 10) shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于CBLUE对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S13:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 1) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end	
+		S14:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 1) shift <= GREEN[bit_cnt];
+			else if(count == 14) shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于CBLUE对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S15:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 1) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+//----------10min�?------------------------------------------------------------------
+		S16:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 3) shift <= GREEN[bit_cnt];
+			else if(count == 2) shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于某种颜色编码对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S17:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 3) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end	
+		S18:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 3) shift <= GREEN[bit_cnt];
+			else if(count == 6) shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于CBLUE对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S19:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 3) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S20:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 3) shift <= GREEN[bit_cnt];
+			else if(count == 10) shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于CBLUE对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S21:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 3) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end	
+		S22:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 3) shift <= GREEN[bit_cnt];
+			else if(count == 14) shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于CBLUE对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S23:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 3) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+//-------------------15min�?--------------------------------------------------------------------------------
+		S24:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 4) shift <= GREEN[bit_cnt];
+			else if(count == 2) shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于某种颜色编码对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S25:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 4) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end	
+		S26:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 4) shift <= GREEN[bit_cnt];
+			else if(count == 6)shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于CBLUE对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S27:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 4) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S28:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 4) shift <= GREEN[bit_cnt];
+			else if(count == 10) shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于CBLUE对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S29:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 4) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end	
+		S30:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 4) shift <= GREEN[bit_cnt];
+			else if(count == 14) shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于CBLUE对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S31:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 4) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+//-----------20min�?-------------------------------------------------------------
+		S32:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 5) shift <= GREEN[bit_cnt];
+			else if(count == 2) shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于某种颜色编码对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S33:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 5) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end	
+		S34:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 5) shift <= GREEN[bit_cnt];
+			else if(count == 6)shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于CBLUE对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S35:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 5) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S36:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 5) shift <= GREEN[bit_cnt];
+			else if(count == 10) shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于CBLUE对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S37:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 5) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end	
+		S38:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 5) shift <= GREEN[bit_cnt];
+			else if(count == 14) shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于CBLUE对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S39:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 5) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+//----------25min�?------------------------------------------------------------------
+		S40:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 7) shift <= GREEN[bit_cnt];
+			else if(count == 2) shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于某种颜色编码对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S41:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 7) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end	
+		S42:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 7) shift <= GREEN[bit_cnt];
+			else if(count == 6) shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于CBLUE对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S43:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 7) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S44:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 7) shift <= GREEN[bit_cnt];
+			else if(count == 10) shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于CBLUE对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S45:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 7) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end	
+		S46:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 7) shift <= GREEN[bit_cnt];
+			else if(count == 14) shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于CBLUE对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S47:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 7) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+//-------------------30min�?--------------------------------------------------------------------------------
+		S48:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 8) shift <= GREEN[bit_cnt];
+			else if(count == 2) shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于某种颜色编码对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S49:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 8) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end	
+		S50:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 8) shift <= GREEN[bit_cnt];
+			else if(count == 6)shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于CBLUE对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S51:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 8) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S52:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 8) shift <= GREEN[bit_cnt];
+			else if(count == 10) shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于CBLUE对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S53:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 8) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end	
+		S54:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 8) shift <= GREEN[bit_cnt];
+			else if(count == 14) shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于CBLUE对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S55:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 8) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+//--------------35min�?--------------------------------------------------------------------------------------------------------
+		S56:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 9) shift <= GREEN[bit_cnt];
+			else if(count == 2) shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于某种颜色编码对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S57:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 9) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end	
+		S58:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 9) shift <= GREEN[bit_cnt];
+			else if(count == 6)shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于CBLUE对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S59:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 9) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S60:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 9) shift <= GREEN[bit_cnt];
+			else if(count == 10) shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于CBLUE对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S61:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 9) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end	
+		S62:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 9) shift <= GREEN[bit_cnt];
+			else if(count == 14) shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于CBLUE对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S63:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 9) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+//----------40min�?------------------------------------------------------------------
+		S64:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 11) shift <= GREEN[bit_cnt];
+			else if(count == 2) shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于某种颜色编码对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S65:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 11) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end	
+		S66:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 11) shift <= GREEN[bit_cnt];
+			else if(count == 6) shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于CBLUE对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S67:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 11) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S68:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 11) shift <= GREEN[bit_cnt];
+			else if(count == 10) shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于CBLUE对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S69:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 11) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end	
+		S70:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 11) shift <= GREEN[bit_cnt];
+			else if(count == 14) shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于CBLUE对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S71:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 11) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+//--------------45min�?--------------------------------------------------------------------------------
+		S72:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 12) shift <= GREEN[bit_cnt];
+			else if(count == 2) shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于某种颜色编码对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S73:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 12) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end	
+		S74:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 12) shift <= GREEN[bit_cnt];
+			else if(count == 6)shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于CBLUE对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S75:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 12) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S76:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 12) shift <= GREEN[bit_cnt];
+			else if(count == 10) shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于CBLUE对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S77:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 12) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end	
+		S78:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 12) shift <= GREEN[bit_cnt];
+			else if(count == 14) shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于CBLUE对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S79:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 12) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+//-----------50min�?-------------------------------------------------------------
+		S80:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 13) shift <= GREEN[bit_cnt];
+			else if(count == 2) shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于某种颜色编码对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S81:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 13) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end	
+		S82:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 13) shift <= GREEN[bit_cnt];
+			else if(count == 6)shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于CBLUE对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S83:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 13) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S84:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 13) shift <= GREEN[bit_cnt];
+			else if(count == 10) shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于CBLUE对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S85:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 13) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end	
+		S86:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 13) shift <= GREEN[bit_cnt];
+			else if(count == 14) shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于CBLUE对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S87:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 13) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+//----------55min�?------------------------------------------------------------------
+		S88:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 15) shift <= GREEN[bit_cnt];
+			else if(count == 2) shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于某种颜色编码对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S89:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 15) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end	
+		S90:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 15) shift <= GREEN[bit_cnt];
+			else if(count == 6) shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于CBLUE对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S91:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 15) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S92:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 15) shift <= GREEN[bit_cnt];
+			else if(count == 10) shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于CBLUE对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S93:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 15) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end	
+		S94:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 15) shift <= GREEN[bit_cnt];
+			else if(count == 14) shift <= DBLUE[bit_cnt]; //随着bit_cnt计数，shift就等于CBLUE对应的bit�?
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;					
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+		S95:
+			begin
+			if(count == 0) shift <= PINK[bit_cnt];
+			else if(count == 15) shift <= GREEN[bit_cnt];
+			else shift <= OFF[bit_cnt];
+			if(shift == 1'b1)
+				begin
+					if(cycle_cnt == T1H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			else
+				begin
+					if(cycle_cnt == T0H)
+						led_pwm <= 1'b0;
+					else if(cycle_cnt == (T1H + T0H - 6'd1))
+						led_pwm <= 1'b1;
+					else
+						led_pwm <= led_pwm;
+				end
+			end
+//-------------------1h�?--------------------------------------------------------------------------------
+		RST_FSM:
+			begin
+				led_pwm <= 1'b0;
+			end
+		default:
+				begin
+					led_pwm <= 1'b0;
+				end
+		endcase
+	end
+end
+
+	
+endmodule	
